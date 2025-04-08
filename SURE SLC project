@@ -1,1 +1,335 @@
+import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:wifi_scan/wifi_scan.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
+void main() {
+  runApp(TravelSafeApp());
+}
+
+class TravelSafeApp extends StatelessWidget {
+  const TravelSafeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      theme: ThemeData(
+        primaryColor: Colors.blueAccent,
+        scaffoldBackgroundColor: Colors.grey[100],
+        textTheme: TextTheme(
+          headlineMedium: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87),
+          bodyMedium: TextStyle(fontSize: 16, color: Colors.black54),
+        ),
+      ),
+      home: TravelSafeScreen(),
+    );
+  }
+}
+
+class TravelSafeScreen extends StatefulWidget {
+  const TravelSafeScreen({super.key});
+
+  @override
+  // ignore: library_private_types_in_public_api
+  _TravelSafeScreenState createState() => _TravelSafeScreenState();
+}
+
+class _TravelSafeScreenState extends State<TravelSafeScreen> with SingleTickerProviderStateMixin {
+  int wifiSafetyStatus = 2; // 0 = Safe, 1 = Protected, 2 = Risky
+  bool isBubbleOn = false;
+  TextEditingController wifiController = TextEditingController();
+  String? selectedWifi;
+  List<String> nearbyWifis = [];
+  bool isAnalyzingWebsite = false;
+
+  late AnimationController _animationController;
+  late Animation<double> _opacityAnimation;
+  late Animation<double> _scaleAnimation;
+
+  List<Map<String, dynamic>> checklist = [
+    {"item": "Travel Documents", "checked": false},
+    {"item": "Wallet", "checked": false},
+    {"item": "Driver's License", "checked": false},
+    {"item": "Credit Cards/Cash", "checked": false},
+    {"item": "Book", "checked": false},
+    {"item": "Headphones", "checked": false},
+    {"item": "Camera", "checked": false},
+    {"item": "Camera Charger", "checked": false},
+    {"item": "Accessories", "checked": false},
+    {"item": "Hygiene Items", "checked": false},
+    {"item": "Neck Pillow", "checked": false},
+    {"item": "Travel Blanket", "checked": false},
+    {"item": "Clothing", "checked": false},
+    {"item": "Shoes", "checked": false},
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 600),
+    )..repeat(reverse: true);
+    _opacityAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.05).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+    requestPermissions();
+    _startWifiScan();
+  }
+
+  Future<void> requestPermissions() async {
+    var status = await Permission.location.request();
+    if (status.isGranted) {
+      _startWifiScan();
+    } else if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    }
+  }
+
+  void _startWifiScan() async {
+    final canScan = await WiFiScan.instance.canStartScan();
+    if (canScan != CanStartScan.yes) return;
+
+    await WiFiScan.instance.startScan();
+    await Future.delayed(Duration(seconds: 2));
+
+    final results = await WiFiScan.instance.getScannedResults();
+    setState(() {
+      nearbyWifis = results.map((e) => e.ssid).where((s) => s.isNotEmpty).toList();
+    });
+  }
+
+  void checkWifiSafety(String ssid) {
+    setState(() {
+      if (ssid.toLowerCase().contains("wpa3") || ssid.toLowerCase().contains("wpa2")) {
+        wifiSafetyStatus = 0; // Safe
+      } else if (ssid.toLowerCase().contains("wpa") || ssid.toLowerCase().contains("wep")) {
+        wifiSafetyStatus = 1; // Protected
+      } else if (ssid.toLowerCase().contains("free") || ssid.toLowerCase().contains("guest")) {
+        wifiSafetyStatus = 2; // Risky (Free Wi-Fi)
+      } else {
+        wifiSafetyStatus = 2; // Risky (Other cases)
+      }
+      selectedWifi = ssid;
+      _animationController.forward(from: 0);
+      analyzeWebsiteIfNeeded(ssid); // Check for website after connecting to Wi-Fi
+    });
+  }
+
+  void analyzeWebsiteIfNeeded(String ssid) {
+    if (wifiSafetyStatus == 2) {
+      setState(() {
+        isAnalyzingWebsite = true;
+      });
+
+      // Assuming the SSID redirects to a website, we would simulate analyzing
+      fetchWebsiteIPAndCheckBlacklist();
+    }
+  }
+
+  Future<void> fetchWebsiteIPAndCheckBlacklist() async {
+    // Placeholder IP, normally this would be fetched based on the website user is redirected to
+    String websiteIP = "192.168.1.1"; // Example IP (replace with real fetch logic)
+    String dnsBlacklistUrl = "https://api.someblacklist.com/check?ip=$websiteIP"; // Example URL
+    
+    final response = await http.get(Uri.parse(dnsBlacklistUrl));
+    if (response.statusCode == 200) {
+      final result = json.decode(response.body);
+      if (result["is_blacklisted"] == true) {
+        setState(() {
+          wifiSafetyStatus = 2; // Risky Wi-Fi if blacklisted IP
+        });
+      }
+    } else {
+      // Handle the case where the DNS lookup fails
+      setState(() {
+        wifiSafetyStatus = 1; // Set to "Protected" if there’s an issue with the check
+      });
+    }
+
+    setState(() {
+      isAnalyzingWebsite = false;
+    });
+  }
+
+  void toggleBubble() {
+    setState(() {
+      isBubbleOn = !isBubbleOn;
+    });
+    // Turn on VPN if safe (add your VPN implementation here)
+    if (wifiSafetyStatus == 0) {
+      // Turn on VPN
+      // ignore: avoid_print
+      print("VPN turned on.");
+    }
+  }
+
+  Color getBubbleColor() {
+    // ignore: deprecated_member_use
+    if (isBubbleOn) return Colors.green.withOpacity(0.9);
+    switch (wifiSafetyStatus) {
+      case 0:
+        // ignore: deprecated_member_use
+        return Colors.green.withOpacity(0.9);
+      case 1:
+        // ignore: deprecated_member_use
+        return Colors.yellow.withOpacity(0.9);
+      case 2:
+        // ignore: deprecated_member_use
+        return Colors.red.withOpacity(0.9);
+      default:
+        // ignore: deprecated_member_use
+        return Colors.grey.withOpacity(0.9);
+    }
+  }
+
+  void toggleChecklist(int index) {
+    setState(() {
+      checklist[index]["checked"] = !checklist[index]["checked"];
+    });
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    wifiController.dispose();
+    super.dispose();
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("TravelSafe", style: TextStyle(color: Colors.white)),
+        backgroundColor: Colors.blueAccent,
+        elevation: 4,
+      ),
+      body: Padding(
+        padding: EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Wi-Fi Safety", style: Theme.of(context).textTheme.headlineMedium),
+            SizedBox(height: 16),
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 2,
+              child: Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: wifiController,
+                      decoration: InputDecoration(
+                        labelText: "Enter Wi-Fi Hotspot Name",
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: checkWifiSafety,
+                    ),
+                    SizedBox(height: 12),
+                    Text("Nearby Networks", style: Theme.of(context).textTheme.bodyMedium),
+                    SizedBox(
+                      height: 100,
+                      child: ListView.builder(
+                        itemCount: nearbyWifis.length,
+                        itemBuilder: (context, index) {
+                          return ListTile(
+                            title: Text(nearbyWifis[index]),
+                            onTap: () {
+                              wifiController.text = nearbyWifis[index];
+                              checkWifiSafety(nearbyWifis[index]);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 20),
+            Center(
+              child: Column(
+                children: [
+                  AnimatedBuilder(
+                    animation: _animationController,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: selectedWifi != null ? _scaleAnimation.value : 1.0,
+                        child: Opacity(
+                          opacity: selectedWifi != null ? _opacityAnimation.value : 1.0,
+                          child: Container(
+                            width: 120,
+                            height: 120,
+                            decoration: BoxDecoration(
+                              color: getBubbleColor(),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  // ignore: deprecated_member_use
+                                  color: getBubbleColor().withOpacity(0.6),
+                                  blurRadius: 12,
+                                  spreadRadius: 4,
+                                ),
+                              ],
+                            ),
+                          )
+                        )
+                      );
+                    },
+                  ),
+                  SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: toggleBubble,
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                    child: Text(isBubbleOn ? "Deactivate Bubble" : "Activate Bubble"),
+                  ),
+                  SizedBox(height: 12),
+                  Text(
+                    selectedWifi != null
+                        ? (wifiSafetyStatus == 0
+                            ? "Safe Wi-Fi"
+                            : wifiSafetyStatus == 1
+                                ? "Protected Wi-Fi"
+                                : "Risky Wi-Fi")
+                        : "Select a Wi-Fi",
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 24),
+            Text("Travel Checklist", style: Theme.of(context).textTheme.headlineMedium),
+            SizedBox(height: 12),
+            Expanded(
+              child: Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: ListView.builder(
+                    itemCount: checklist.length,
+                    itemBuilder: (context, index) {
+                      return CheckboxListTile(
+                        title: Text(checklist[index]["item"]),
+                        value: checklist[index]["checked"],
+                        onChanged: (_) => toggleChecklist(index),
+                        activeColor: Colors.blueAccent,
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
